@@ -31,9 +31,10 @@ Everything OpenCV runs in a Web Worker, so the page stays responsive.
 
 ## Measured behaviour
 
-Numbers from desktop Chrome on Linux (Ryzen workstation), using the synthetic
-13-stop bracket that `tools/make-testdata.py` generates. Regenerate the fixtures
-and you can re-run all of these.
+Numbers from desktop Chrome on Linux (Ryzen workstation) unless stated, using
+the synthetic 13-stop bracket that `tools/make-testdata.py` generates. Regenerate
+the fixtures and you can re-run all of these. Mobile figures come from a
+OnePlus 13 running `selftest.html`.
 
 | Test | Result |
 |---|---|
@@ -69,8 +70,36 @@ Two consequences worth knowing:
 - Once the heap is exhausted it stays exhausted — retrying inside the same worker
   OOMs again (verified). On OOM the app **throws the worker away**, spawns a fresh
   one, and retries at 60 % of the resolution, saying so in the status line.
-- Choosing "Full" on a large stack costs two failed attempts (~8 s) before it
-  settles on a size that fits.
+- Choosing "Full" on a large stack costs two failed attempts (~8 s on desktop)
+  before it settles on a size that fits.
+
+### The ceiling is the same on a phone
+
+A OnePlus 13 (Chrome 151, 8 cores) hits the **identical** pass/fail boundary —
+same successes, same OOM at 5 × 8 MP. The limit is the wasm heap in this OpenCV
+build, not the device's RAM, so the Auto budget derived on desktop needs no
+mobile-specific tuning.
+
+| Stack | desktop Chrome | OnePlus 13 | ratio |
+|---|---|---|---|
+| 5 × 1 MP | 0.4 s | 1.5 s | 3.8× |
+| 5 × 2 MP | 0.8 s | 2.3 s | 2.9× |
+| 5 × 4 MP | 1.6 s | 4.0 s | 2.5× |
+| 5 × 6 MP | 2.4 s | 5.3 s | 2.2× |
+| 5 × 8 MP | **OOM** | **OOM** | — |
+| 3 × 8 MP | 1.9 s | 3.6 s | 1.9× |
+| 9 × 3 MP | 2.1 s | 5.6 s | 2.7× |
+| 5 × 2 MP true HDR | 2.4 s | 5.3 s | 2.2× |
+| engine init per worker | 249–325 ms | 405–1816 ms | up to 6× |
+
+The phone is roughly 2–3× slower per merge. Worker startup is the bigger relative
+penalty, and it is paid again on every OOM retry — so choosing "Full" on a large
+stack costs noticeably more on mobile than the ~8 s it costs on desktop.
+
+Against the original goal of "a 5-shot 12 MP handheld bracket in under 15 s on a
+phone, no crash": the time is met comfortably, but not at 12 MP. Auto downscales
+that stack to 6 MP, merging in 5.3 s. Note also that a OnePlus 13 is a flagship,
+not the mid-range device the goal named.
 
 ### Exposure fusion blows large flat highlights
 
@@ -115,17 +144,17 @@ status line. A clean merge logs nothing and leaves the button hidden.
 ladder above on whatever device opens it and prints a table you can paste into an
 issue. Each trial gets a fresh worker, results are written to `localStorage` as
 they finish so a crashed tab still leaves a record, and the `n=5` ladder stops as
-soon as it hits the ceiling. Device reports are welcome — every number in the
-memory table above is desktop Chrome, so mobile figures are the open gap.
+soon as it hits the ceiling. Device reports are welcome — two devices agreeing
+on the ceiling is suggestive, not proof, and nothing weaker than a OnePlus 13
+has been timed.
 
 ## Not tested
 
-- **Android Chrome works** (reported by a user on their own phone), but its
-  memory ceiling has not been measured. Auto sizing — 30 MP per stack, 8 MP per
-  frame — is derived from desktop Chrome, so it may be more or less conservative
-  than a given phone wants; the OOM retry path is what catches the difference.
-  The self-test above prints the number for a device if you want it.
-- Firefox and Safari, on any platform.
+- Firefox and Safari, on any platform. Everything measured here is Chrome —
+  desktop Chrome on Linux and Chrome 151 on Android.
+- Any device weaker than a OnePlus 13. The memory ceiling looks
+  device-independent (two very different machines, same boundary), but that is
+  two data points, and merge times on a genuinely mid-range phone are unknown.
 - Cameras other than the Sony RX10 IV, and any RAW workflow.
 - Deghosting when the subject moves through a region the reference frame has
   blown or crushed. The guard deliberately declines to touch those pixels, so
