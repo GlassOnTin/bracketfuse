@@ -105,20 +105,23 @@ status line. A clean merge logs nothing and leaves the button hidden.
 ladder above on whatever device opens it and prints a table you can paste into an
 issue. Each trial gets a fresh worker, results are written to `localStorage` as
 they finish so a crashed tab still leaves a record, and the `n=5` ladder stops as
-soon as it hits the ceiling. Device reports are welcome — mobile numbers are the
-gap in the table above.
+soon as it hits the ceiling. Device reports are welcome — every number in the
+memory table above is desktop Chrome, so mobile figures are the open gap.
 
 ## Not tested
 
-- **Any mobile browser.** Desktop Chrome only. Phones have less wasm headroom, so
-  Auto sizing will likely need to be more conservative there; the OOM retry path
-  is what catches it. Run the self-test above if you want the number for yours.
-- Firefox and Safari.
-- Real camera files — all testing used synthetic brackets with known ground truth.
-- Moving subjects. There is no deghosting; anything that moves between frames
-  will ghost. See below.
+- **Android Chrome works** (reported by a user on their own phone), but its
+  memory ceiling has not been measured. Auto sizing — 30 MP per stack, 8 MP per
+  frame — is derived from desktop Chrome, so it may be more or less conservative
+  than a given phone wants; the OOM retry path is what catches the difference.
+  The self-test above prints the number for a device if you want it.
+- Firefox and Safari, on any platform.
+- Cameras other than the Sony RX10 IV, and any RAW workflow.
+- Deghosting when the subject moves through a region the reference frame has
+  blown or crushed. The guard deliberately declines to touch those pixels, so
+  ghosts survive there — visible on people silhouetted against bright sky.
 
-### Moving subjects ghost, and the bracket's time span is what decides it
+### Where the ghosting came from
 
 Tested on a real handheld bracket: a Sony RX10 IV 5-shot bracket (1/8000 → 1/30,
 f/16, ISO 400) of a crowded terrace, 20 MP frames, merged at 3.33 MP.
