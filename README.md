@@ -1,4 +1,11 @@
-# BracketFuse
+# BracketFuse — merge exposure brackets in your browser
+
+<p align="center">
+  <a href="https://glassontin.github.io/bracketfuse/"><img src="https://img.shields.io/badge/web%20app-live-38bdf8?style=flat-square&logo=googlechrome&logoColor=white" alt="Web app" /></a>
+  <img src="https://img.shields.io/badge/backend-none-4c1?style=flat-square" alt="No backend" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-orange?style=flat-square" alt="License: AGPL-3.0" /></a>
+  <a href="https://ko-fi.com/glassontin"><img src="https://img.shields.io/badge/Ko--fi-support-ff5e5b?style=flat-square&logo=ko-fi&logoColor=white" alt="Support on Ko-fi" /></a>
+</p>
 
 Merge exposure brackets into one image, entirely in your browser. Drop in 2–9
 bracketed photos, get back an aligned, merged, tone-mapped result. No install,
@@ -314,9 +321,22 @@ Two quirks of that build the code works around:
 - `MergeMertens.process` is the 4-argument base-class signature; the 2-argument
   overload is bound as `process1`.
 
+## Support
+
+BracketFuse is free and AGPL-licensed, and costs nothing to run because there is
+no server to pay for. If it saved you a Lightroom subscription, you can
+**[buy me a coffee on Ko-fi](https://ko-fi.com/glassontin)** ☕ — entirely
+optional, always appreciated.
+
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+**GNU AGPL-3.0-or-later** — see [LICENSE](LICENSE). Strong copyleft: if you
+modify it and let people use it over a network, those users are entitled to your
+modified source. Since this is a static site whose source is the JavaScript it
+already ships, the practical obligation is just to keep a link to your fork —
+the page footer has one.
 
-OpenCV is Apache-2.0, exifr is MIT. Both are redistributed unmodified in
-`vendor/`.
+Bundled dependencies keep their own licences and are redistributed unmodified in
+`vendor/`: OpenCV is Apache-2.0, exifr is MIT. Both are compatible with
+AGPL-3.0 — Apache-2.0 is one-way compatible with GPLv3-family licences, so the
+combined work is AGPL while those files stay under their original terms.
