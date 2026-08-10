@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BracketFuse device self-test</title>
+<style>
+:root { --bg:#12151a; --panel:#1a1f27; --line:#2b323d; --ink:#e7ebf0; --dim:#96a0ad; --accent:#ff9d4d; --ok:#5ed69a; --bad:#ff6b6b; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+main { max-width:760px; margin:0 auto; padding:20px 14px 60px; }
+h1 { font-size:1.3rem; margin:0 0 4px; }
+p.sub { color:var(--dim); margin:0 0 18px; font-size:.9rem; }
+button { font:inherit; font-weight:600; border:0; border-radius:8px; padding:12px 20px; background:var(--accent); color:#21160c; cursor:pointer; }
+button:disabled { opacity:.45; }
+button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); font-weight:500; }
+.row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:14px 0; }
+table { width:100%; border-collapse:collapse; margin-top:14px; font-size:.9rem; }
+th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); }
+th { color:var(--dim); font-weight:500; font-size:.8rem; }
+td.v { font-variant-numeric:tabular-nums; }
+.ok { color:var(--ok); } .bad { color:var(--bad); } .run { color:var(--accent); }
+pre { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; overflow-x:auto; font-size:.78rem; white-space:pre; }
+#note { color:var(--dim); font-size:.85rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>BracketFuse device self-test</h1>
+<p class="sub">Finds how large a stack this device can merge before the WebAssembly heap runs out. Each trial uses a fresh worker. Results are saved as they finish, so a crash still leaves a record — just reload.</p>
+
+<div class="row">
+  <button id="run">Run self-test</button>
+  <button id="copy" class="ghost">Copy results</button>
+  <button id="wipe" class="ghost">Clear</button>
+</div>
+<p id="note">Takes a few minutes on a phone. Keep the screen on and this tab in front.</p>
+
+<table id="tbl"><thead><tr><th>Trial</th><th>Frames</th><th>MP each</th><th>Result</th><th>Merge</th></tr></thead><tbody></tbody></table>
+
+<h2 style="font-size:1rem;margin-top:26px">Paste this back</h2>
+<pre id="out">(no results yet)</pre>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const KEY = 'bracketfuse-selftest';
+const load = () => JSON.parse(localStorage.getItem(KEY) || '{"env":null,"trials":[]}');
+const save = (s) => localStorage.setItem(KEY, JSON.stringify(s));
+
+// n=5 ascends until the heap gives out; the other two probe stack-count effects.
+const PLAN = [
+  { n: 5, mp: 1,  method: 'fusion' },
+  { n: 5, mp: 2,  method: 'fusion' },
+  { n: 5, mp: 4,  method: 'fusion' },
+  { n: 5, mp: 6,  method: 'fusion' },
+  { n: 5, mp: 8,  method: 'fusion' },
+  { n: 5, mp: 12, method: 'fusion' },
+  { n: 3, mp: 8,  method: 'fusion' },
+  { n: 9, mp: 3,  method: 'fusion' },
+  { n: 5, mp: 2,  method: 'hdr'    },
+];
+
+function env() {
+  return {
+    ua: navigator.userAgent,
+    cores: navigator.hardwareConcurrency ?? null,
+    deviceMemoryGB: navigator.deviceMemory ?? null,
+    screen: `${screen.width}x${screen.height} @${devicePixelRatio}x`,
+    coarsePointer: matchMedia('(pointer:coarse)').matches,
+  };
+}
+
+let bitmaps = null;
+async function fixtures() {
+  if (!bitmaps) {
+    bitmaps = [];
+    for (let i = 0; i < 5; i++) {
+      bitmaps.push(await createImageBitmap(await (await fetch(`testdata/bracket_${i}.jpg`)).blob()));
+    }
+  }
+  return bitmaps;
+}
+
+const TIMES = [1/2000, 1/500, 1/125, 1/30, 1/8];
+
+async function trial({ n, mp, method }) {
+  const src = await fixtures();
+  const w = new Worker('worker.js');
+  const wait = (t) => new Promise((r) => {
+    const h = (e) => { if (e.data.type === t || e.data.type === 'error') { w.removeEventListener('message', h); r(e.data); } };
+    w.addEventListener('message', h);
+  });
+  const tInit = Date.now();
+  let initMs = null;
+  try {
+    for (let i = 0; i < n; i++) {
+      const b = src[i % 5];
+      const k = Math.sqrt((mp * 1e6) / (b.width * b.height));
+      const W = Math.max(1, Math.round(b.width * k)), H = Math.max(1, Math.round(b.height * k));
+      const oc = new OffscreenCanvas(W, H);
+      const g = oc.getContext('2d', { willReadFrequently: true });
+      g.drawImage(b, 0, 0, W, H);
+      const id = g.getImageData(0, 0, W, H);
+      w.postMessage({ type: 'push', rgba: id.data.buffer, w: W, h: H, time: TIMES[i % 5] }, [id.data.buffer]);
+      const p = await wait('pushed');
+      if (initMs === null) initMs = Date.now() - tInit; // first reply covers engine startup
+      if (p.type === 'error') return { verdict: 'push-fail', detail: p.message, initMs };
+    }
+    const t = Date.now();
+    w.postMessage({ type: 'run', opts: { align: true, method, tonemap: 'drago', gamma: 1.6,
+      contrast: 1, saturation: method === 'hdr' ? 0.9 : 1, exposure: 1, bias: 0.85, intensity: 0, scale: 0.7, lightAdapt: 1, colorAdapt: 0 } });
+    const r = await wait('result');
+    if (r.type === 'error') return { verdict: r.oom ? 'OOM' : 'error', detail: r.message.slice(0, 120), initMs };
+    return { verdict: 'ok', mergeMs: Date.now() - t, out: `${r.w}x${r.h}`, initMs };
+  } catch (e) {
+    return { verdict: 'threw', detail: String(e).slice(0, 120), initMs };
+  } finally {
+    w.terminate();
+  }
+}
+
+function render() {
+  const s = load();
+  const tb = $('tbl').querySelector('tbody');
+  tb.innerHTML = '';
+  s.trials.forEach((t, i) => {
+    const cls = t.verdict === 'ok' ? 'ok' : t.verdict === 'running' ? 'run' : 'bad';
+    const res = t.verdict === 'ok' ? `ok (${t.out})` : t.verdict + (t.detail ? ` — ${t.detail.slice(0, 40)}` : '');
+    tb.insertAdjacentHTML('beforeend',
+      `<tr><td class="v">${i + 1}${t.method === 'hdr' ? ' (HDR)' : ''}</td><td class="v">${t.n}</td><td class="v">${t.mp}</td>` +
+      `<td class="${cls}">${res}</td><td class="v">${t.mergeMs ? (t.mergeMs / 1000).toFixed(1) + 's' : '—'}</td></tr>`);
+  });
+  $('out').textContent = s.env ? report(s) : '(no results yet)';
+}
+
+function report(s) {
+  const lines = ['BracketFuse self-test', ''];
+  for (const [k, v] of Object.entries(s.env)) lines.push(`${k}: ${v}`);
+  const init = s.trials.map((t) => t.initMs).filter(Boolean);
+  if (init.length) lines.push(`engine init: ${Math.min(...init)}–${Math.max(...init)} ms per worker`);
+  lines.push('', 'frames  MP   method   result           merge');
+  for (const t of s.trials) {
+    lines.push(
+      String(t.n).padEnd(7) + String(t.mp).padEnd(5) + (t.method || 'fusion').padEnd(9) +
+      (t.verdict === 'ok' ? `ok ${t.out}` : t.verdict + (t.detail ? ` (${t.detail.slice(0, 50)})` : '')).padEnd(17) +
+      (t.mergeMs ? (t.mergeMs / 1000).toFixed(1) + 's' : '')
+    );
+  }
+  return lines.join('\n');
+}
+
+$('run').addEventListener('click', async () => {
+  $('run').disabled = true;
+  const s = { env: env(), trials: [] };
+  save(s); render();
+  let fiveFailedAt = Infinity;
+  for (const p of PLAN) {
+    // once n=5 dies at some size, larger n=5 trials are a foregone conclusion
+    if (p.n === 5 && p.method === 'fusion' && p.mp > fiveFailedAt) {
+      s.trials.push({ ...p, verdict: 'skipped', detail: `n=5 already failed at ${fiveFailedAt} MP` });
+      save(s); render(); continue;
+    }
+    s.trials.push({ ...p, verdict: 'running' });
+    save(s); render();
+    const r = await trial(p);
+    Object.assign(s.trials[s.trials.length - 1], r);
+    if (p.n === 5 && p.method === 'fusion' && r.verdict !== 'ok') fiveFailedAt = Math.min(fiveFailedAt, p.mp);
+    save(s); render();
+    await new Promise((r2) => setTimeout(r2, 400)); // let the previous heap actually go away
+  }
+  $('run').disabled = false;
+  $('note').textContent = 'Done. Copy the block below and send it back.';
+});
+
+$('copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('out').textContent); $('copy').textContent = 'Copied'; }
+  catch { getSelection().selectAllChildren($('out')); $('copy').textContent = 'Select + copy manually'; }
+  setTimeout(() => ($('copy').textContent = 'Copy results'), 2500);
+});
+
+$('wipe').addEventListener('click', () => { localStorage.removeItem(KEY); render(); $('note').textContent = 'Cleared.'; });
+
+render();
+</script>
+</body>
+</html>

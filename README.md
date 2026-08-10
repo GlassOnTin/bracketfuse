@@ -71,11 +71,20 @@ This is upstream OpenCV behaviour, reproduced identically on desktop. If it
 matters for your image, use **True HDR + tone map** — on the same scene that path
 returns 0 % blown and 0 % crushed pixels, with the window's colour intact.
 
+## Measure your own device
+
+[`selftest.html`](https://glassontin.github.io/bracketfuse/selftest.html) runs the
+ladder above on whatever device opens it and prints a table you can paste into an
+issue. Each trial gets a fresh worker, results are written to `localStorage` as
+they finish so a crashed tab still leaves a record, and the `n=5` ladder stops as
+soon as it hits the ceiling. Device reports are welcome — mobile numbers are the
+gap in the table above.
+
 ## Not tested
 
 - **Any mobile browser.** Desktop Chrome only. Phones have less wasm headroom, so
   Auto sizing will likely need to be more conservative there; the OOM retry path
-  is what catches it.
+  is what catches it. Run the self-test above if you want the number for yours.
 - Firefox and Safari.
 - Real camera files — all testing used synthetic brackets with known ground truth.
 - Moving subjects. There is no deghosting; anything that moves between frames
