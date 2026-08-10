@@ -232,9 +232,11 @@ function finish({ rgba, w, h, ms, shifts, hasHdr: gotHdr }) {
   exports.hidden = false;
   bar.classList.remove('on');
   busy = false; go.disabled = false;
-  const moved = shifts ? shifts.filter(([x, y]) => x || y).length : 0;
+  const moved = shifts ? shifts.filter((s) => s.x || s.y || s.deg).length : 0;
+  const maxDeg = shifts ? Math.max(0, ...shifts.map((s) => Math.abs(s.deg))) : 0;
   say(`Merged ${shots.length} frames to ${w}×${h} in ${(ms / 1000).toFixed(1)}s` +
       (shifts ? ` · realigned ${moved} of ${shifts.length}` : '') +
+      (maxDeg >= 0.02 ? ` (up to ${maxDeg.toFixed(2)}° rotation)` : '') +
       (downscaled ? ' · downscaled to fit available memory' : ''));
   downscaled = false;
 }

@@ -25,28 +25,88 @@ function free() {
 
 // --- pipeline steps -------------------------------------------------------
 
+// Rotation is estimated on a copy no wider than this. It is a single global
+// angle, so the extra precision from full resolution is not worth the time.
+const ECC_WIDTH = 1120;
+// Below this the correction is not worth resampling the frame for: an integer
+// shift copies pixels exactly, warpAffine interpolates and softens slightly.
+const MIN_ANGLE_DEG = 0.02;
+
+// Grayscale, downscaled, float — what findTransformECC wants.
+function eccInput(gray, k) {
+  const small = new cv.Mat();
+  if (k < 1) cv.resize(gray, small, new cv.Size(0, 0), k, k, cv.INTER_AREA);
+  else gray.copyTo(small);
+  const f = new cv.Mat();
+  small.convertTo(f, cv.CV_32F, 1 / 255);
+  small.delete();
+  return f;
+}
+
 // AlignMTB's process(src, dst, ...) never writes to the dst MatVector through
 // the JS bindings, so drive the shift search directly. Reference is the middle
 // frame, which is the closest to a normal exposure.
+//
+// MTB only models integer translation. Handheld frames also rotate — measured
+// 0.04-0.53 deg on a real bracket, which left 1.7-10.6 px of residual error
+// that no shift can remove. findTransformECC refines each frame to a Euclidean
+// (rotation + translation) fit, seeded by the MTB shift; that cut the residual
+// to 1.0-3.0 px on the same frames. ECC maximises the correlation coefficient,
+// which is already invariant to brightness and contrast, so the wide exposure
+// spread needs no normalising and no edge extraction.
 function align() {
   const ref = stack[Math.floor(stack.length / 2)];
   const mtb = new cv.AlignMTB(6, 4, true);
   const grayRef = new cv.Mat();
   cv.cvtColor(ref.mat, grayRef, cv.COLOR_RGB2GRAY);
+  const k = Math.min(1, ECC_WIDTH / grayRef.cols);
+  const refSmall = eccInput(grayRef, k);
+  const crit = new cv.TermCriteria(cv.TermCriteria_EPS | cv.TermCriteria_COUNT, 80, 1e-6);
+  const noMask = new cv.Mat();
+  const size = new cv.Size(grayRef.cols, grayRef.rows);
   const shifts = [];
+
   for (let i = 0; i < stack.length; i++) {
-    if (stack[i] === ref) { shifts.push([0, 0]); continue; }
+    if (stack[i] === ref) { shifts.push({ x: 0, y: 0, deg: 0 }); continue; }
     progress(10 + (25 * i) / stack.length, `Aligning frame ${i + 1}…`);
     const gray = new cv.Mat();
     cv.cvtColor(stack[i].mat, gray, cv.COLOR_RGB2GRAY);
     const s = mtb.calculateShift(grayRef, gray);
+
+    let deg = 0, warp = null;
+    const movSmall = eccInput(gray, k);
+    try {
+      warp = cv.Mat.eye(2, 3, cv.CV_32F);
+      warp.data32F[2] = -s.x * k;   // seed with the shift MTB already found
+      warp.data32F[5] = -s.y * k;
+      cv.findTransformECC(refSmall, movSmall, warp, cv.MOTION_EUCLIDEAN, crit, noMask, 5);
+      deg = -Math.atan2(warp.data32F[3], warp.data32F[0]) * 180 / Math.PI;
+      warp.data32F[2] /= k;         // rotation is scale-free, translation is not
+      warp.data32F[5] /= k;
+    } catch (err) {
+      // ECC throws when it cannot converge — a near-black frame usually.
+      if (warp) { warp.delete(); warp = null; }
+      deg = 0;
+    }
+    movSmall.delete();
     gray.delete();
+
     const out = new cv.Mat();
-    mtb.shiftMat(stack[i].mat, out, s);
+    if (warp && Math.abs(deg) >= MIN_ANGLE_DEG) {
+      cv.warpAffine(stack[i].mat, out, warp, size,
+                    cv.INTER_LINEAR | cv.WARP_INVERSE_MAP, cv.BORDER_REPLICATE, new cv.Scalar());
+    } else {
+      mtb.shiftMat(stack[i].mat, out, s);   // exact pixel copy, no resampling
+      deg = 0;
+    }
+    if (warp) warp.delete();
     stack[i].mat.delete();
     stack[i].mat = out;
-    shifts.push([s.x, s.y]);
+    shifts.push({ x: s.x, y: s.y, deg });
   }
+
+  noMask.delete();
+  refSmall.delete();
   grayRef.delete();
   mtb.delete();
   return shifts;

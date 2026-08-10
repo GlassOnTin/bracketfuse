@@ -9,7 +9,8 @@ A static site: fork it, enable GitHub Pages, done.
 ## What it does
 
 - **Decode** — `createImageBitmap`, EXIF exposure time / ISO / aperture via [exifr](https://github.com/MikeKovarik/exifr)
-- **Align** — `cv.AlignMTB` median-threshold bitmaps, for handheld stacks
+- **Align** — `cv.AlignMTB` median-threshold bitmaps for the integer shift, then
+  `cv.findTransformECC` (`MOTION_EUCLIDEAN`) to recover rotation as well
 - **Exposure fusion** (default) — `cv.MergeMertens`. No exposure times needed, display-ready output
 - **True HDR** — `cv.CalibrateDebevec` + `cv.MergeDebevec` into a real radiance map, then Drago / Reinhard / Mantiuk tone mapping
 - **Export** — JPEG, PNG, and Radiance `.hdr` from the true-HDR path
@@ -97,9 +98,8 @@ f/16, ISO 400) of a crowded terrace, 20 MP frames, merged at 3.33 MP.
 
 Alignment held up. `AlignMTB` corrected 57 px of horizontal and 50 px of vertical
 handheld drift across the stack, and the static stonework came out sharp at 1:1
-with no visible doubling. Feature fitting still showed 0.2–0.8° of residual
-rotation between frames, which `AlignMTB` cannot model at all — but at this
-resolution it did not visibly hurt.
+with no visible doubling. It did leave 0.04–0.53° of rotation, which `AlignMTB`
+cannot model at all — see below.
 
 The people did not survive. Merging 9 frames spanning 16 s produced stacked
 translucent copies of every person, with white halos where someone stood against
@@ -108,7 +108,61 @@ Frame count and elapsed time drive this, not alignment quality — so the app no
 reads `DateTimeOriginal` and warns when a selection spans more than 3 s, or when
 exposure times repeat (which means more than one bracket got selected).
 
-One more thing that showed up: at 1/8000 f/16 ISO 400 the darkest frame has a
+### Rotation: why ECC, and why no normalisation
+
+`AlignMTB` is integer translation only. Candidates for recovering rotation were
+benchmarked against known ground truth (a real photo re-projected by known
+angles, then exposed across 8 stops down to a median pixel value of 1, matching
+the real bracket). Only primitives the WASM build actually exposes were allowed —
+`phaseCorrelate` and `logPolar` are absent, so phase correlation was hand-rolled
+from `dft`.
+
+| method | mean absolute angle error | time |
+|---|---|---|
+| `AlignMTB` (translation only) | 0.637° — cannot model rotation | 0.1 s |
+| ECC on raw greyscale | **0.001°** | 1.7 s |
+| ECC on normalised gradient | 0.002° | 3.8 s |
+| ECC on MTB bitmaps | 0.005° | 2.1 s |
+| ORB + affine RANSAC | 0.014° | 0.5 s |
+| Fourier–Mellin (log-polar) | 0.094° | 2.3 s |
+
+Normalising the images or switching to edges does not help, and costs up to 2×
+the time. `findTransformECC` maximises the enhanced correlation coefficient,
+which is **already invariant to affine photometric change** — brightness and
+contrast — so the exposure spread is handled by the cost function itself. That
+invariance is the whole point of ECC over plain SSD.
+
+Fourier–Mellin works and is a reasonable idea, but it is 10–100× less accurate
+here (its angular resolution is set by the log-polar bin count) and no faster.
+
+On the real bracket, where there is no ground truth, ECC / ORB / Fourier–Mellin
+independently agree to within ~0.03° on the well-exposed frames. Measuring
+registration directly — median displacement of matched static features after
+alignment — gives:
+
+| frame | `AlignMTB` alone | + ECC rotation | recovered angle |
+|---|---|---|---|
+| DSC06648 (1/8000) | 8.01 px | 2.99 px | 0.044° |
+| DSC06649 (1/2000) | 10.57 px | 2.99 px | 0.528° |
+| DSC06651 (1/125) | 3.22 px | 1.44 px | 0.361° |
+| DSC06652 (1/30) | 1.73 px | 1.00 px | 0.116° |
+
+So ECC refinement roughly halves to thirds the residual on every frame, for about
+0.2 s extra per stack. It is seeded with the MTB shift, estimated on a copy no
+wider than 1120 px (a single global angle does not need full resolution), and
+falls back to the plain integer shift when it fails to converge or finds less
+than 0.02° — an integer shift copies pixels exactly, where `warpAffine` would
+interpolate and soften slightly for no gain.
+
+Two cautions on reading the table above: a Laplacian-variance "sharpness" score
+is **not** a valid comparison here, because the rotated path resamples and the
+integer-shift path does not, and the blur difference swamps the registration
+difference. And at 3.33 MP the visible improvement is subtle; it grows with
+output resolution, since the same angle spans proportionally more pixels.
+
+### Very dark frames
+
+At 1/8000 f/16 ISO 400 the darkest frame has a
 median pixel value of **1**, with 85 % of pixels within ±8 of that median.
 `AlignMTB` thresholds at the median, so its bitmap is essentially noise and the
 shift it computes for such a frame is not trustworthy — ORB independently found
