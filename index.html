@@ -232,6 +232,10 @@ document.getElementById('copyDiag').addEventListener('click', function () {
 });
 </script>
 <script src="vendor/exifr.js"></script>
-<script src="app.js" type="module"></script>
+<!-- ?v= is the cache buster. GitHub Pages serves everything with max-age=600,
+     so without it a fresh deploy is invisible for ten minutes and you end up
+     testing yesterday's code. app.js passes this query on to worker.js and
+     rgbe.js. Bump it with tools/bump-cache.sh. -->
+<script src="app.js?v=3" type="module"></script>
 </body>
 </html>

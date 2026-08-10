@@ -1,6 +1,11 @@
 // BracketFuse main thread: decode, meter, drive the worker, export.
 // Everything heavy lives in worker.js.
-import { encodeHDR } from './rgbe.js';
+
+// Carry this module's ?v= on to everything it loads. A static import would
+// resolve against the base URL and drop the query, so rgbe.js is pulled in
+// dynamically at the point of use instead — which also means it is only
+// fetched if someone actually exports a .hdr.
+const V = new URL(import.meta.url).search;
 
 const $ = (id) => document.getElementById(id);
 const drop = $('drop'), fileInput = $('file'), strip = $('strip'), status = $('status');
@@ -22,7 +27,7 @@ let worker = null, busy = false, lastResult = null, hasHdr = false;
 
 function spawn() {
   if (worker) worker.terminate();
-  worker = new Worker('worker.js');
+  worker = new Worker('worker.js' + V);
   // A throw inside a handler would otherwise vanish into the console — and
   // leave the UI stuck mid-merge with no explanation.
   worker.onmessage = (e) => {
@@ -42,7 +47,9 @@ const ask = (msg, transfer) => worker.postMessage(msg, transfer || []);
 const handlers = {
   progress: ({ pct, msg }) => setProgress(pct, msg),
   result: (m) => finish(m),
-  hdrData: (m) => saveHdr(m),
+  // async now that the encoder is loaded on demand, so catch it explicitly
+  // rather than leaning on the global unhandled-rejection net.
+  hdrData: (m) => saveHdr(m).catch((e) => fail(`Could not build the .hdr: ${e.message}`)),
   error: (m) => (m.oom ? retrySmaller(m) : fail(m.message)),
   pushed: () => {},
   ready: () => {},
@@ -295,9 +302,8 @@ wipe.addEventListener('input', () => setWipe(wipe.value));
 function wipeFrom(clientX) {
   const r = compare.getBoundingClientRect();
   if (!r.width) return;
-  const pct = Math.max(0, Math.min(100, ((clientX - r.left) / r.width) * 100));
-  wipe.value = pct;
-  setWipe(pct);
+  wipe.value = Math.max(0, Math.min(100, ((clientX - r.left) / r.width) * 100));
+  setWipe(wipe.value);   // read back, so the handle and the input agree after rounding
 }
 let wiping = false;
 compare.addEventListener('pointerdown', (e) => {
@@ -355,7 +361,8 @@ $('dlJpg').addEventListener('click', () => save('jpg', 'image/jpeg', 0.92));
 $('dlPng').addEventListener('click', () => save('png', 'image/png'));
 $('dlHdr').addEventListener('click', () => hasHdr && ask({ type: 'hdr' }));
 
-function saveHdr({ data, w, h }) {
+async function saveHdr({ data, w, h }) {
+  const { encodeHDR } = await import('./rgbe.js' + V);
   const bytes = encodeHDR(new Float32Array(data), w, h);
   download(new Blob([bytes], { type: 'image/vnd.radiance' }), 'hdr');
 }

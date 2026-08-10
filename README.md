@@ -321,6 +321,13 @@ Then open <http://127.0.0.1:8777/>.
 To deploy: enable GitHub Pages on the repository, serving from the branch root.
 There is no build step.
 
+Run `tools/bump-cache.sh` before pushing a change to `app.js`, `worker.js` or
+`rgbe.js`. Pages serves everything with `Cache-Control: max-age=600`, so without
+a fresh `?v=` the browser keeps running the old code for ten minutes against the
+new page — which has already produced one false test result here, a working
+build that looked broken. `vendor/opencv.js` is deliberately left unversioned:
+it is pinned by hash and 13 MB, so it should stay cached.
+
 ## Repository layout
 
 ```
@@ -330,6 +337,7 @@ worker.js             all OpenCV work
 rgbe.js               Radiance .hdr encoder (separate so it is testable in node)
 vendor/opencv.js      pinned OpenCV 5.0.0 WASM build, photo module included
 vendor/exifr.js       pinned exifr lite build
+tools/bump-cache.sh    bump ?v= before deploying, so the new code is visible at once
 tools/fetch-engine.sh re-download vendor/ and verify against pinned sha256sums
 tools/make-testdata.py regenerate the synthetic bracket fixtures
 testdata/             the committed 1600×1200 bracket
