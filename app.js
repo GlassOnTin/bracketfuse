@@ -22,8 +22,17 @@ let worker = null, busy = false, lastResult = null, hasHdr = false;
 function spawn() {
   if (worker) worker.terminate();
   worker = new Worker('worker.js');
-  worker.onmessage = (e) => (handlers[e.data.type] || (() => {}))(e.data);
+  // A throw inside a handler would otherwise vanish into the console — and
+  // leave the UI stuck mid-merge with no explanation.
+  worker.onmessage = (e) => {
+    try {
+      (handlers[e.data.type] || (() => {}))(e.data);
+    } catch (err) {
+      fail(`Failed handling ${e.data.type}: ${err.message}`);
+    }
+  };
   worker.onerror = (e) => fail(e.message || 'Worker crashed.');
+  worker.onmessageerror = () => fail('Lost a message from the worker (could not be copied between threads).');
   return worker;
 }
 
@@ -192,13 +201,22 @@ async function merge(capMP) {
     say('No exposure times in EXIF — using exposure fusion instead.');
   }
 
-  for (const [i, s] of shots.entries()) {
-    setProgress(2 + (6 * i) / shots.length, `Preparing frame ${i + 1} of ${shots.length}…`);
-    const { data, width, height } = raster(s.bitmap, capMP);
-    ask({ type: 'push', rgba: data.buffer, w: width, h: height, time: s.time }, [data.buffer]);
-    await new Promise((r) => setTimeout(r, 0)); // let the worker drain between frames
+  // Everything below is async, so an unguarded throw here becomes an unhandled
+  // rejection: nothing on screen and the UI stuck with the button disabled.
+  // Preparing frames allocates a full-size canvas per frame, which is exactly
+  // where a phone runs out of memory.
+  try {
+    for (const [i, s] of shots.entries()) {
+      setProgress(2 + (6 * i) / shots.length, `Preparing frame ${i + 1} of ${shots.length}…`);
+      const { data, width, height } = raster(s.bitmap, capMP);
+      ask({ type: 'push', rgba: data.buffer, w: width, h: height, time: s.time }, [data.buffer]);
+      await new Promise((r) => setTimeout(r, 0)); // let the worker drain between frames
+    }
+    ask({ type: 'run', opts });
+  } catch (err) {
+    if (/memory|allocat/i.test(err.message || '')) retrySmaller({ message: err.message });
+    else fail(`Could not prepare the frames: ${err.message}`);
   }
-  ask({ type: 'run', opts });
 }
 
 // Decode to RGBA at or below the megapixel cap.
@@ -254,6 +272,7 @@ function fail(message) {
   bar.classList.remove('on');
   busy = false; go.disabled = shots.length < 2;
   say(message, true);
+  window.__bf?.record?.('app', message);   // also logs it for "Copy error details"
 }
 
 function setProgress(pct, msg) {
@@ -278,8 +297,15 @@ function download(blob, ext) {
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 
-$('dlJpg').addEventListener('click', () => out.toBlob((b) => download(b, 'jpg'), 'image/jpeg', 0.92));
-$('dlPng').addEventListener('click', () => out.toBlob((b) => download(b, 'png'), 'image/png'));
+// toBlob hands back null when the browser cannot encode — usually a canvas too
+// large for the device. Without this the failure is a silent no-op on click.
+const save = (ext, type, q) => out.toBlob((b) => {
+  if (b) download(b, ext);
+  else fail(`Could not encode the ${ext.toUpperCase()} — the image may be too large for this device. Try a smaller size.`);
+}, type, q);
+
+$('dlJpg').addEventListener('click', () => save('jpg', 'image/jpeg', 0.92));
+$('dlPng').addEventListener('click', () => save('png', 'image/png'));
 $('dlHdr').addEventListener('click', () => hasHdr && ask({ type: 'hdr' }));
 
 function saveHdr({ data, w, h }) {
@@ -304,3 +330,6 @@ if (!window.Worker || !window.OffscreenCanvas || !window.createImageBitmap) {
   say('This browser is missing Web Workers or OffscreenCanvas — try a current Chrome, Firefox, or Safari.', true);
   go.disabled = true;
 }
+
+// Tells the startup watchdog in index.html that the module graph loaded and ran.
+window.__bf.booted = true;

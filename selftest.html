@@ -4,6 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BracketFuse device self-test</title>
+<script>
+// Classic and inline on purpose: a diagnostics page that fails silently is
+// worthless, and this has to survive the module below failing to load.
+window.addEventListener('error', function (e) {
+  var n = document.getElementById('note');
+  if (!n) return;
+  n.textContent = e.target && e.target.tagName
+    ? 'Could not load ' + (e.target.src || e.target.tagName) + ' — reload the page.'
+    : 'Error: ' + (e.message || 'unknown') + (e.filename ? ' @ ' + e.filename.replace(/.*\//, '') + ':' + e.lineno : '');
+  n.style.color = '#ff6b6b';
+}, true);
+window.addEventListener('unhandledrejection', function (e) {
+  var n = document.getElementById('note');
+  if (n) { n.textContent = 'Error: ' + ((e.reason && e.reason.message) || e.reason); n.style.color = '#ff6b6b'; }
+});
+</script>
 <style>
 :root { --bg:#12151a; --panel:#1a1f27; --line:#2b323d; --ink:#e7ebf0; --dim:#96a0ad; --accent:#ff9d4d; --ok:#5ed69a; --bad:#ff6b6b; }
 * { box-sizing:border-box; }

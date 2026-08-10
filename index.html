@@ -4,6 +4,52 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BracketFuse — merge exposure brackets in your browser</title>
+<script>
+// Deliberately a classic inline script, first thing on the page: it has to keep
+// working when the module below fails to load, which is the one failure a phone
+// user cannot diagnose — the page renders normally and simply does nothing.
+window.__bf = { log: [], booted: false };
+(function () {
+  function show(msg) {
+    var el = document.getElementById('status');
+    if (!el) { document.addEventListener('DOMContentLoaded', function () { show(msg); }, { once: true }); return; }
+    el.textContent = msg;
+    el.className = 'err';
+    var btn = document.getElementById('copyDiag');
+    if (btn) btn.hidden = false;
+  }
+  function record(kind, msg, where) {
+    window.__bf.log.push(new Date().toISOString().slice(11, 19) + ' ' + kind + ': ' + msg + (where ? ' @ ' + where : ''));
+    if (window.__bf.log.length > 25) window.__bf.log.shift();
+    show(msg);
+  }
+  window.__bf.record = record;
+  // Capture phase, so failed <script>/<img> loads are seen too — they do not bubble.
+  window.addEventListener('error', function (e) {
+    if (e.target && e.target !== window && e.target.tagName) {
+      record('load failed', 'Could not load ' + (e.target.src || e.target.href || e.target.tagName) +
+             ' — reload the page, or check your connection.');
+      return;
+    }
+    record('error', e.message || 'Unknown error',
+           e.filename ? e.filename.replace(/.*\//, '') + ':' + e.lineno : '');
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    record('unhandled', (r && r.message) || String(r));
+  });
+  setTimeout(function () {
+    if (!window.__bf.booted) record('startup', 'The app did not start — a script failed to load. Try reloading.');
+  }, 8000);
+  window.__bf.details = function () {
+    return ['BracketFuse diagnostics', 'url: ' + location.href, 'ua: ' + navigator.userAgent,
+            'cores: ' + (navigator.hardwareConcurrency || '?'),
+            'deviceMemory: ' + (navigator.deviceMemory || '?') + ' GB',
+            'screen: ' + screen.width + 'x' + screen.height + ' @' + devicePixelRatio + 'x',
+            'booted: ' + window.__bf.booted, ''].concat(window.__bf.log).join('\n');
+  };
+})();
+</script>
 <meta name="description" content="Drop bracketed photos in, get an aligned, merged HDR image out. Runs entirely on your device — no upload, no account.">
 <style>
 :root {
@@ -100,6 +146,7 @@ footer a { color: var(--dim); }
 
   <div id="bar"><i></i></div>
   <p id="status"></p>
+  <button id="copyDiag" class="ghost" hidden>Copy error details</button>
 
   <canvas id="out"></canvas>
   <div class="row" id="exports" hidden>
@@ -137,6 +184,15 @@ footer a { color: var(--dim); }
     &middot; <a href="selftest.html">Device self-test</a>
   </footer>
 </main>
+<script>
+document.getElementById('copyDiag').addEventListener('click', function () {
+  var text = window.__bf.details(), btn = this;
+  var done = function (ok) { btn.textContent = ok ? 'Copied' : 'Press and hold to copy'; setTimeout(function () { btn.textContent = 'Copy error details'; }, 3000); };
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+  else done(false);
+  if (btn.textContent !== 'Copied') console.log(text);
+});
+</script>
 <script src="vendor/exifr.js"></script>
 <script src="app.js" type="module"></script>
 </body>

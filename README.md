@@ -74,6 +74,31 @@ This is upstream OpenCV behaviour, reproduced identically on desktop. If it
 matters for your image, use **True HDR + tone map** — on the same scene that path
 returns 0 % blown and 0 % crushed pixels, with the window's colour intact.
 
+## Diagnosing failures without DevTools
+
+Every failure path reports to the status line on the page, so a phone user can
+say what went wrong without attaching a debugger. When anything is caught, a
+**Copy error details** button appears with the user agent, core count, device
+memory, screen size and the last 25 log lines, ready to paste into an issue.
+
+Covered: worker exceptions (including OpenCV's raw wasm pointer throws, decoded
+via `exceptionFromPtr`), worker crashes and message-clone failures, out-of-memory
+with its automatic retry, per-file decode failures, frame preparation running out
+of memory, `toBlob` returning null on a canvas too large to encode, uncaught
+exceptions and unhandled promise rejections anywhere on the page, and any asset
+that fails to load.
+
+The handler is a classic inline script at the top of the document, before the
+module. That is deliberate: the one failure a phone user cannot diagnose is the
+module graph not loading, because the page renders normally and simply does
+nothing when you drop photos on it. That case was silent before — now the missing
+file is named immediately, and a watchdog reports it if the app has not started
+within 8 seconds.
+
+Verified by fault injection: unhandled rejection, throw in a timer, throw in an
+event handler, a 404'd script, and a genuinely missing module all reach the
+status line. A clean merge logs nothing and leaves the button hidden.
+
 ## Measure your own device
 
 [`selftest.html`](https://glassontin.github.io/bracketfuse/selftest.html) runs the
