@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BracketFuse — merge exposure brackets in your browser</title>
+<meta name="description" content="Drop bracketed photos in, get an aligned, merged HDR image out. Runs entirely on your device — no upload, no account.">
+<style>
+:root {
+  --bg: #12151a; --panel: #1a1f27; --line: #2b323d; --ink: #e7ebf0;
+  --dim: #96a0ad; --accent: #ff9d4d; --accent-ink: #21160c; --bad: #ff6b6b;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; } /* flex/grid rules below would otherwise win */
+body {
+  margin: 0; background: var(--bg); color: var(--ink); line-height: 1.5;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -.02em; }
+h1 span { color: var(--accent); }
+.sub { color: var(--dim); margin: 0 0 24px; }
+button, select, input[type=range] { font: inherit; }
+button {
+  background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px;
+  padding: 10px 18px; font-weight: 600; cursor: pointer;
+}
+button:disabled { opacity: .45; cursor: default; }
+button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+
+#drop {
+  border: 2px dashed var(--line); border-radius: 14px; padding: 40px 20px; text-align: center;
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+#drop.over { border-color: var(--accent); background: #ff9d4d10; }
+#drop p { margin: 6px 0 0; color: var(--dim); font-size: .9rem; }
+
+#strip { display: flex; gap: 10px; overflow-x: auto; padding: 16px 0 4px; }
+#strip figure { margin: 0; flex: 0 0 auto; width: 108px; }
+#strip img { width: 108px; height: 81px; object-fit: cover; border-radius: 6px; display: block; background: #000; }
+#strip figcaption { font-size: .72rem; color: var(--dim); margin-top: 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 16px 0; }
+.row label { display: flex; gap: 6px; align-items: center; color: var(--dim); }
+
+details { border: 1px solid var(--line); border-radius: 10px; padding: 0 14px; margin: 16px 0; background: var(--panel); }
+details summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+details[open] summary { border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.ctl { display: grid; grid-template-columns: 132px 1fr 52px; gap: 10px; align-items: center; margin-bottom: 10px; }
+.ctl span:first-child { color: var(--dim); font-size: .88rem; }
+.ctl output { color: var(--dim); font-size: .82rem; text-align: right; font-variant-numeric: tabular-nums; }
+.ctl input[type=range] { width: 100%; accent-color: var(--accent); }
+
+#bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; display: none; }
+#bar.on { display: block; }
+#bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+#status { color: var(--dim); font-size: .88rem; min-height: 1.4em; margin-top: 8px; }
+#status.err { color: var(--bad); }
+
+#out { width: 100%; border-radius: 10px; display: none; margin-top: 8px; background: #000; }
+footer { color: var(--dim); font-size: .82rem; margin-top: 48px; border-top: 1px solid var(--line); padding-top: 16px; }
+footer a { color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bracket<span>Fuse</span></h1>
+  <p class="sub">Merge exposure brackets into one image. Nothing leaves your device.</p>
+
+  <div id="drop" tabindex="0" role="button" aria-label="Choose bracketed photos">
+    <strong>Drop 2–9 bracketed photos here</strong>
+    <p>or click to choose &middot; JPEG / PNG / WebP</p>
+    <input id="file" type="file" accept="image/*" multiple hidden>
+  </div>
+
+  <div id="strip" aria-live="polite"></div>
+
+  <div class="row">
+    <button id="go" disabled>Merge</button>
+    <button id="clear" class="ghost" hidden>Clear</button>
+    <label><input id="doAlign" type="checkbox" checked> Align (handheld)</label>
+    <label>Method
+      <select id="method">
+        <option value="fusion">Exposure fusion</option>
+        <option value="hdr">True HDR + tone map</option>
+      </select>
+    </label>
+    <label>Size
+      <select id="cap">
+        <option value="0">Auto</option>
+        <option value="2">2 MP</option>
+        <option value="4">4 MP</option>
+        <option value="8">8 MP</option>
+        <option value="99">Full</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="bar"><i></i></div>
+  <p id="status"></p>
+
+  <canvas id="out"></canvas>
+  <div class="row" id="exports" hidden>
+    <button id="dlJpg">Download JPEG</button>
+    <button id="dlPng" class="ghost">PNG</button>
+    <button id="dlHdr" class="ghost" hidden>Radiance .hdr</button>
+  </div>
+
+  <details id="adv">
+    <summary>Advanced</summary>
+    <div data-when="fusion">
+      <div class="ctl"><span>Contrast</span><input type="range" id="contrast" min="0" max="2" step="0.05" value="1"><output>1.00</output></div>
+      <div class="ctl"><span>Saturation</span><input type="range" id="saturation" min="0" max="2" step="0.05" value="1"><output>1.00</output></div>
+      <div class="ctl"><span>Well-exposedness</span><input type="range" id="exposure" min="0" max="2" step="0.05" value="1"><output>1.00</output></div>
+    </div>
+    <div data-when="hdr" hidden>
+      <div class="ctl"><span>Tone map</span>
+        <select id="tonemap">
+          <option value="drago">Drago</option>
+          <option value="reinhard">Reinhard</option>
+          <option value="mantiuk">Mantiuk</option>
+          <option value="linear">Linear (gamma only)</option>
+        </select><output></output>
+      </div>
+      <div class="ctl"><span>Gamma</span><input type="range" id="gamma" min="0.5" max="3" step="0.05" value="1.6"><output>1.60</output></div>
+      <div class="ctl"><span>Saturation</span><input type="range" id="hsat" min="0" max="2" step="0.05" value="0.9"><output>0.90</output></div>
+      <div class="ctl"><span>Bias / intensity</span><input type="range" id="bias" min="0" max="1" step="0.01" value="0.85"><output>0.85</output></div>
+      <p class="sub" style="font-size:.82rem;margin:4px 0 12px">Needs EXIF exposure times, or falls back to exposure fusion.</p>
+    </div>
+  </details>
+
+  <footer>
+    Runs on <a href="https://opencv.org/">OpenCV</a> compiled to WebAssembly, in a Web Worker, on this device.
+    No server, no upload, no analytics. &middot; <a href="https://github.com/GlassOnTin/bracketfuse">Source</a>
+  </footer>
+</main>
+<script src="vendor/exifr.js"></script>
+<script src="app.js" type="module"></script>
+</body>
+</html>

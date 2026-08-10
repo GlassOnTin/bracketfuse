@@ -1,0 +1,2 @@
+testdata/big_*.jpg
+testdata/ground_truth_radiance.npy
