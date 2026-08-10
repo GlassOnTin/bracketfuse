@@ -22,6 +22,9 @@ A static site: fork it, enable GitHub Pages, done.
 - **True HDR** — `cv.CalibrateDebevec` + `cv.MergeDebevec` into a real radiance map, then Drago / Reinhard / Mantiuk tone mapping
 - **Deghost** — moving subjects replaced with an exposure-matched prediction from
   the reference frame, so a walking crowd fuses as one solid copy
+- **Compare** — a before/after wipe over the preview. "Before" is the reference
+  frame, which is the one frame alignment never warps, so it registers with the
+  result pixel for pixel and needs no extra data from the worker
 - **Export** — JPEG, PNG, and Radiance `.hdr` from the true-HDR path
 
 Everything OpenCV runs in a Web Worker, so the page stays responsive.

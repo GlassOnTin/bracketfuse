@@ -5,6 +5,7 @@ import { encodeHDR } from './rgbe.js';
 const $ = (id) => document.getElementById(id);
 const drop = $('drop'), fileInput = $('file'), strip = $('strip'), status = $('status');
 const bar = $('bar'), barFill = bar.firstElementChild, out = $('out'), exports = $('exports');
+const compare = $('compare'), before = $('before'), wipe = $('wipe'), handle = $('handle');
 const go = $('go'), method = $('method');
 
 // Measured in desktop Chrome on this OpenCV build: MergeMertens completes at
@@ -153,7 +154,7 @@ function reset() {
   shots.forEach((s) => s.bitmap.close());
   shots = [];
   lastResult = null; hasHdr = false;
-  strip.innerHTML = ''; out.style.display = 'none'; exports.hidden = true;
+  strip.innerHTML = ''; compare.hidden = true; exports.hidden = true;
   fileInput.value = '';
   render();
   say('');
@@ -242,10 +243,11 @@ function retrySmaller({ message }) {
   merge(next); // spawns a fresh worker; the exhausted heap cannot be reused
 }
 
-function finish({ rgba, w, h, ms, shifts, ghosted, hasHdr: gotHdr }) {
+function finish({ rgba, w, h, ms, shifts, ghosted, refIdx, hasHdr: gotHdr }) {
   out.width = w; out.height = h;
   out.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba), w, h), 0, 0);
-  out.style.display = 'block';
+  showBefore(refIdx, w, h);
+  compare.hidden = false;
   lastResult = { w, h };
   hasHdr = gotHdr;
   $('dlHdr').hidden = !gotHdr;
@@ -266,6 +268,51 @@ function finish({ rgba, w, h, ms, shifts, ghosted, hasHdr: gotHdr }) {
         'Try frames taken closer together, or untick Remove ghosts.', true);
   }
   downscaled = false;
+}
+
+// The "before" panel is the reference frame at output size. Drawing it from the
+// bitmap already in memory costs nothing extra, and because alignment leaves the
+// reference unwarped it lines up with the result exactly.
+function showBefore(refIdx, w, h) {
+  const shot = shots[refIdx];
+  if (!shot) { before.hidden = true; return; }
+  before.hidden = false;
+  before.width = w; before.height = h;
+  before.getContext('2d').drawImage(shot.bitmap, 0, 0, w, h);
+  $('tagBefore').textContent = shutter(shot.time) ? `before · ${shutter(shot.time)}` : 'before';
+  setWipe(wipe.value);
+}
+
+function setWipe(pct) {
+  before.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+  handle.style.left = `${pct}%`;
+}
+
+wipe.addEventListener('input', () => setWipe(wipe.value));
+
+// Pointer dragging is handled here rather than by the range input, so the
+// divider lands exactly under the finger or cursor.
+function wipeFrom(clientX) {
+  const r = compare.getBoundingClientRect();
+  if (!r.width) return;
+  const pct = Math.max(0, Math.min(100, ((clientX - r.left) / r.width) * 100));
+  wipe.value = pct;
+  setWipe(pct);
+}
+let wiping = false;
+compare.addEventListener('pointerdown', (e) => {
+  wiping = true;
+  try { compare.setPointerCapture(e.pointerId); } catch { /* capture is a bonus */ }
+  wipeFrom(e.clientX);
+});
+// Accept a held button as well as our own capture: pointer capture is not
+// guaranteed (and a press that began outside the image still arrives here as a
+// move with buttons set), so relying on it alone silently drops drags.
+compare.addEventListener('pointermove', (e) => {
+  if (wiping || (e.buttons & 1)) wipeFrom(e.clientX);
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  window.addEventListener(ev, () => { wiping = false; });
 }
 
 function fail(message) {

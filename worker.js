@@ -352,7 +352,10 @@ const ops = {
     progress(95, 'Encoding…');
     const { buf, w, h } = toRGBA(f32);
     f32.delete();
-    post({ type: 'result', rgba: buf, w, h, shifts, ghosted,
+    // refIdx lets the page draw the "before" image itself, from the bitmap it
+    // already holds — the reference is the one frame alignment never warps, so
+    // it lines up with the result pixel for pixel without shipping it back.
+    post({ type: 'result', rgba: buf, w, h, shifts, ghosted, refIdx,
            ms: Date.now() - started, hasHdr: !!hdr }, [buf]);
   },
 
