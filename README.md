@@ -13,6 +13,8 @@ A static site: fork it, enable GitHub Pages, done.
   `cv.findTransformECC` (`MOTION_EUCLIDEAN`) to recover rotation as well
 - **Exposure fusion** (default) — `cv.MergeMertens`. No exposure times needed, display-ready output
 - **True HDR** — `cv.CalibrateDebevec` + `cv.MergeDebevec` into a real radiance map, then Drago / Reinhard / Mantiuk tone mapping
+- **Deghost** — moving subjects replaced with an exposure-matched prediction from
+  the reference frame, so a walking crowd fuses as one solid copy
 - **Export** — JPEG, PNG, and Radiance `.hdr` from the true-HDR path
 
 Everything OpenCV runs in a Web Worker, so the page stays responsive.
@@ -107,6 +109,52 @@ sky in only some frames. Cutting to 3 frames spanning 3 s left most people solid
 Frame count and elapsed time drive this, not alignment quality — so the app now
 reads `DateTimeOriginal` and warns when a selection spans more than 3 s, or when
 exposure times repeat (which means more than one bracket got selected).
+
+### Deghosting
+
+OpenCV has no deghosting merge, so the stack is repaired before `MergeMertens`
+sees it. Two frames of one scene at different exposures are related by a
+monotonic intensity mapping, so matching histogram quantiles recovers it without
+needing exposure times or a camera response. Each frame is predicted from the
+reference through that mapping; where the real frame disagrees by more than
+`median + 3·MAD` of its own residual, something moved, and the prediction is
+substituted through a feathered mask. Every frame then agrees on the subject and
+it fuses as one solid copy.
+
+Two rules keep it from doing harm:
+
+- **Never substitute where the reference is blown or black.** The prediction is
+  meaningless there, and the other frames legitimately hold different content —
+  that content *is* the highlight and shadow recovery the bracket exists for.
+  Without this guard the darkest frame's genuine window detail was overwritten
+  with white.
+- **Sample the histogram by striding, never by resizing down.** `INTER_AREA`
+  averages neighbours into values that do not occur in the image, skewing the
+  distribution and therefore the mapping. That alone made a completely static
+  scene report 3.1% of the frame as ghosted.
+
+Measured on a synthetic scene where the ideal deghosted answer is known (a
+subject moved 520 px across the stack, compared against the same stack with it
+frozen at the reference position):
+
+| | error in the swept region | error on static content |
+|---|---|---|
+| no deghosting | 21.29 | 0.74 |
+| deghosted | **6.02** | **0.35** |
+
+(mean absolute difference from the ideal merge, 0–255 scale — static content got
+slightly *better*, so it is not damaging clean areas.)
+
+On the real crowd bracket it replaces 4.6% of the frame and most people come out
+solid instead of translucent; a few silhouetted against bright sky survive,
+because the reference is blown there and the guard above correctly declines to
+touch it. On a static tripod stack it replaces 0.0% and the output is identical
+to not running it at all.
+
+Reference choice matters more than the threshold. The frame is picked by
+*well-exposed fraction minus blown fraction*; on the real bracket that chose the
+1/125 frame over the brighter 1/30 one, whose sky was 22.6% blown. That single
+choice moved the crowd-band score from 0.9216 to 0.9873.
 
 ### Rotation: why ECC, and why no normalisation
 

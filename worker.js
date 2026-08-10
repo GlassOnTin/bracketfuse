@@ -43,9 +43,32 @@ function eccInput(gray, k) {
   return f;
 }
 
+// The reference frame anchors both alignment and deghosting, so pick the one
+// carrying the most usable detail: well-exposed pixels minus blown ones. Blown
+// highlights are penalised because saturation is unrecoverable and breaks the
+// intensity mapping deghosting depends on. On a real bracket this chose the
+// 1/125 frame over the brighter 1/30 one, whose sky was 22.6% blown.
+function pickReference() {
+  let best = 0, bestScore = -Infinity;
+  for (let i = 0; i < stack.length; i++) {
+    const gray = new cv.Mat();
+    cv.cvtColor(stack[i].mat, gray, cv.COLOR_RGB2GRAY);
+    const d = gray.data;
+    let good = 0, blown = 0;
+    for (let p = 0; p < d.length; p += 7) {   // every 7th pixel is plenty for a fraction
+      const v = d[p];
+      if (v > 16 && v < 240) good++;
+      if (v >= 250) blown++;
+    }
+    gray.delete();
+    const score = (good - blown) / Math.ceil(d.length / 7);
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  return best;
+}
+
 // AlignMTB's process(src, dst, ...) never writes to the dst MatVector through
-// the JS bindings, so drive the shift search directly. Reference is the middle
-// frame, which is the closest to a normal exposure.
+// the JS bindings, so drive the shift search directly.
 //
 // MTB only models integer translation. Handheld frames also rotate — measured
 // 0.04-0.53 deg on a real bracket, which left 1.7-10.6 px of residual error
@@ -54,8 +77,8 @@ function eccInput(gray, k) {
 // to 1.0-3.0 px on the same frames. ECC maximises the correlation coefficient,
 // which is already invariant to brightness and contrast, so the wide exposure
 // spread needs no normalising and no edge extraction.
-function align() {
-  const ref = stack[Math.floor(stack.length / 2)];
+function align(refIdx) {
+  const ref = stack[refIdx];
   const mtb = new cv.AlignMTB(6, 4, true);
   const grayRef = new cv.Mat();
   cv.cvtColor(ref.mat, grayRef, cv.COLOR_RGB2GRAY);
@@ -110,6 +133,135 @@ function align() {
   grayRef.delete();
   mtb.delete();
   return shifts;
+}
+
+// --- deghosting -----------------------------------------------------------
+// OpenCV has no deghosting merge, so fix the stack before MergeMertens sees it.
+// Two frames of the same scene at different exposures are related by a
+// monotonic intensity mapping, so matching histogram quantiles recovers it.
+// Predict each frame from the reference through that mapping; wherever the real
+// frame disagrees, something moved, and the prediction is substituted. All
+// frames then agree on the moving subject and it fuses as a single solid copy.
+
+// Quantile-matching LUT taking reference levels to this frame's levels.
+//
+// The histogram is sampled by striding over pixels, never by resizing down:
+// INTER_AREA averages neighbours and invents intermediate values that do not
+// exist in the image, which skews the distribution and hence the mapping. That
+// alone made a completely static scene report 3.1% of the frame as ghosted.
+function toneLUT(refCh, movCh) {
+  const a = refCh.data, b = movCh.data;
+  const stride = Math.max(1, Math.floor(a.length / 1e6));
+  const hr = new Uint32Array(256), hm = new Uint32Array(256);
+  let n = 0;
+  for (let p = 0; p < a.length; p += stride) { hr[a[p]]++; hm[b[p]]++; n++; }
+  const lut = new cv.Mat(1, 256, cv.CV_8UC1);
+  if (!n) { for (let v = 0; v < 256; v++) lut.data[v] = v; return lut; }
+  let cr = 0, cm = hm[0], w = 0;
+  for (let v = 0; v < 256; v++) {
+    cr += hr[v];
+    while (w < 255 && cm < cr) { w++; cm += hm[w]; }
+    lut.data[v] = w;
+  }
+  return lut;
+}
+
+// Reference predicted into the exposure of frame `mov`.
+function predictFrom(ref, mov) {
+  const rc = new cv.MatVector(), mc = new cv.MatVector();
+  cv.split(ref, rc); cv.split(mov, mc);
+  const outv = new cv.MatVector();
+  for (let c = 0; c < 3; c++) {
+    const lut = toneLUT(rc.get(c), mc.get(c));
+    const mapped = new cv.Mat();
+    cv.LUT(rc.get(c), lut, mapped);
+    outv.push_back(mapped);
+    lut.delete(); mapped.delete();
+  }
+  const pred = new cv.Mat();
+  cv.merge(outv, pred);
+  rc.delete(); mc.delete(); outv.delete();
+  return pred;
+}
+
+// Returns the fraction of the frame replaced.
+function deghostFrame(frame, pred, refGray, k) {
+  const diff = new cv.Mat();
+  cv.absdiff(frame, pred, diff);
+  const ch = new cv.MatVector();
+  cv.split(diff, ch);
+  const d = new cv.Mat();
+  cv.max(ch.get(0), ch.get(1), d);
+  cv.max(d, ch.get(2), d);
+  ch.delete(); diff.delete();
+  cv.GaussianBlur(d, d, new cv.Size(0, 0), 2);
+
+  // Threshold from the frame's own noise: median + k*MAD over pixels where the
+  // reference actually carries detail.
+  // Only where the reference itself carries detail. Where it is blown or black
+  // the predicted value is meaningless, and the other frames legitimately hold
+  // different content there — that is the highlight and shadow recovery the
+  // whole bracket exists for. Substituting there would throw it away.
+  const dd = d.data, rg = refGray.data;
+  const sample = [];
+  const usable = (p) => rg[p] > 4 && rg[p] < 250;
+  for (let p = 0; p < dd.length; p += 11) if (usable(p)) sample.push(dd[p]);
+  if (sample.length < 500) { d.delete(); return 0; }
+  sample.sort((x, y) => x - y);
+  const med = sample[sample.length >> 1];
+  const dev = sample.map((v) => Math.abs(v - med)).sort((x, y) => x - y);
+  const mad = dev[dev.length >> 1] * 1.4826;
+  const thr = Math.max(10, med + k * mad);
+  const span = Math.max(thr * 0.6, 6);
+
+  const alpha = new cv.Mat(d.rows, d.cols, cv.CV_8UC1);
+  const ad = alpha.data;
+  for (let p = 0; p < dd.length; p++) {
+    ad[p] = usable(p) ? Math.max(0, Math.min(255, ((dd[p] - thr) / span) * 255)) : 0;
+  }
+  d.delete();
+  // Erode before dilating. Real movement is a connected blob and survives;
+  // isolated speckle from noise and from a global tone curve not fitting every
+  // local colour does not. Without this a static scene still flagged 6% of the
+  // frame, because dilation alone amplifies exactly that speckle.
+  const small = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+  const big = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(11, 11));
+  cv.erode(alpha, alpha, small);
+  cv.dilate(alpha, alpha, big);
+  small.delete(); big.delete();
+  cv.GaussianBlur(alpha, alpha, new cv.Size(0, 0), 9);
+
+  // Blend in place over the raw bytes — cheaper in memory than float Mats.
+  const fd = frame.data, pd = pred.data, av = alpha.data;
+  let covered = 0;
+  for (let p = 0, q = 0; p < fd.length; p += 3, q++) {
+    const a = av[q];
+    if (a === 0) continue;
+    covered += a;
+    const inv = 255 - a;
+    fd[p] = (fd[p] * inv + pd[p] * a) / 255;
+    fd[p + 1] = (fd[p + 1] * inv + pd[p + 1] * a) / 255;
+    fd[p + 2] = (fd[p + 2] * inv + pd[p + 2] * a) / 255;
+  }
+  const frac = covered / (255 * av.length);
+  alpha.delete();
+  return frac;
+}
+
+function deghost(refIdx, k) {
+  const ref = stack[refIdx].mat;
+  const refGray = new cv.Mat();
+  cv.cvtColor(ref, refGray, cv.COLOR_RGB2GRAY);
+  let total = 0;
+  for (let i = 0; i < stack.length; i++) {
+    if (i === refIdx) continue;
+    progress(36 + (6 * i) / stack.length, `Removing ghosts ${i + 1}…`);
+    const pred = predictFrom(ref, stack[i].mat);
+    total += deghostFrame(stack[i].mat, pred, refGray, k);
+    pred.delete();
+  }
+  refGray.delete();
+  return (100 * total) / Math.max(1, stack.length - 1);
 }
 
 function vecOf() {
@@ -183,8 +335,10 @@ const ops = {
     const opts = msg.opts;
     if (stack.length < 2) throw new Error('Need at least two exposures.');
     const started = Date.now();
+    const refIdx = pickReference();
     let shifts = null;
-    if (opts.align) shifts = align();
+    if (opts.align) shifts = align(refIdx);
+    const ghosted = opts.deghost ? deghost(refIdx, opts.ghostK ?? 3) : null;
 
     progress(40, opts.method === 'hdr' ? 'Merging (true HDR)…' : 'Fusing exposures…');
     const vec = vecOf();
@@ -198,7 +352,8 @@ const ops = {
     progress(95, 'Encoding…');
     const { buf, w, h } = toRGBA(f32);
     f32.delete();
-    post({ type: 'result', rgba: buf, w, h, shifts, ms: Date.now() - started, hasHdr: !!hdr }, [buf]);
+    post({ type: 'result', rgba: buf, w, h, shifts, ghosted,
+           ms: Date.now() - started, hasHdr: !!hdr }, [buf]);
   },
 
   // Radiance floats for .hdr export, fetched only when the user asks.

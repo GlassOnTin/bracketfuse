@@ -162,6 +162,8 @@ function chosenCap() {
 function options() {
   return {
     align: $('doAlign').checked,
+    deghost: $('doDeghost').checked,
+    ghostK: 3,
     method: method.value,
     contrast: +$('contrast').value,
     saturation: method.value === 'hdr' ? +$('hsat').value : +$('saturation').value,
@@ -222,7 +224,7 @@ function retrySmaller({ message }) {
   merge(next); // spawns a fresh worker; the exhausted heap cannot be reused
 }
 
-function finish({ rgba, w, h, ms, shifts, hasHdr: gotHdr }) {
+function finish({ rgba, w, h, ms, shifts, ghosted, hasHdr: gotHdr }) {
   out.width = w; out.height = h;
   out.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba), w, h), 0, 0);
   out.style.display = 'block';
@@ -237,7 +239,14 @@ function finish({ rgba, w, h, ms, shifts, hasHdr: gotHdr }) {
   say(`Merged ${shots.length} frames to ${w}×${h} in ${(ms / 1000).toFixed(1)}s` +
       (shifts ? ` · realigned ${moved} of ${shifts.length}` : '') +
       (maxDeg >= 0.02 ? ` (up to ${maxDeg.toFixed(2)}° rotation)` : '') +
+      (ghosted != null ? ` · ghosts replaced over ${ghosted.toFixed(1)}% of frame` : '') +
       (downscaled ? ' · downscaled to fit available memory' : ''));
+  // Past roughly a quarter of the frame the output is mostly one exposure, which
+  // defeats the point of bracketing — say so rather than quietly returning it.
+  if (ghosted > 25) {
+    say(status.textContent + ' — that is a lot; the result is close to a single exposure. ' +
+        'Try frames taken closer together, or untick Remove ghosts.', true);
+  }
   downscaled = false;
 }
 
