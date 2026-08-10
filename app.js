@@ -73,14 +73,15 @@ async function add(files) {
 
 async function load(file) {
   const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-  let time = null, iso = null, fnum = null;
+  let time = null, iso = null, fnum = null, when = null;
   try {
     // No tag picker: the lite exifr bundle ships without the tag-name
     // dictionary the array form needs, and throws on it.
     const x = await exifr.parse(file);
-    if (x) ({ ExposureTime: time = null, ISO: iso = null, FNumber: fnum = null } = x);
+    if (x) ({ ExposureTime: time = null, ISO: iso = null, FNumber: fnum = null,
+              DateTimeOriginal: when = null } = x);
   } catch { /* no EXIF is normal for screenshots and edited files */ }
-  return { file, bitmap, time, iso, fnum, lum: meter(bitmap) };
+  return { file, bitmap, time, iso, fnum, when, lum: meter(bitmap) };
 }
 
 // Mean luminance of a 32px thumbnail — used to order frames when EXIF is absent.
@@ -116,10 +117,27 @@ function render() {
   $('clear').hidden = !shots.length;
   const timed = shots.filter((s) => s.time > 0).length;
   if (shots.length >= 2) {
-    say(`${shots.length} frames · ${timed === shots.length ? 'exposure times found' : `${timed}/${shots.length} have exposure times`}`);
+    const base = `${shots.length} frames · ${timed === shots.length ? 'exposure times found' : `${timed}/${shots.length} have exposure times`}`;
+    const warn = advisory();
+    say(base + (warn.length ? ' · ' + warn.join(' · ') : ''), warn.length > 0);
   } else if (shots.length === 1) {
     say('Add at least one more exposure.');
   }
+}
+
+// Exposure fusion has no deghosting: a subject that moves between frames comes
+// out as stacked translucent copies. Both conditions below make that likely and
+// are cheap to spot from EXIF, so say so before the user spends a merge on it.
+function advisory() {
+  const notes = [];
+  const stamps = shots.map((s) => s.when && +s.when).filter(Boolean);
+  if (stamps.length >= 2) {
+    const span = (Math.max(...stamps) - Math.min(...stamps)) / 1000;
+    if (span > 3) notes.push(`spans ${span < 60 ? `${span.toFixed(0)}s` : `${(span / 60).toFixed(1)} min`} — moving subjects will ghost`);
+  }
+  const et = shots.map((s) => s.time).filter(Boolean);
+  if (new Set(et).size < et.length) notes.push('exposure times repeat — this looks like more than one bracket');
+  return notes;
 }
 
 function reset() {

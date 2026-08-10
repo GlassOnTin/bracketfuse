@@ -88,7 +88,33 @@ gap in the table above.
 - Firefox and Safari.
 - Real camera files — all testing used synthetic brackets with known ground truth.
 - Moving subjects. There is no deghosting; anything that moves between frames
-  will ghost.
+  will ghost. See below.
+
+### Moving subjects ghost, and the bracket's time span is what decides it
+
+Tested on a real handheld bracket: a Sony RX10 IV 5-shot bracket (1/8000 → 1/30,
+f/16, ISO 400) of a crowded terrace, 20 MP frames, merged at 3.33 MP.
+
+Alignment held up. `AlignMTB` corrected 57 px of horizontal and 50 px of vertical
+handheld drift across the stack, and the static stonework came out sharp at 1:1
+with no visible doubling. Feature fitting still showed 0.2–0.8° of residual
+rotation between frames, which `AlignMTB` cannot model at all — but at this
+resolution it did not visibly hurt.
+
+The people did not survive. Merging 9 frames spanning 16 s produced stacked
+translucent copies of every person, with white halos where someone stood against
+sky in only some frames. Cutting to 3 frames spanning 3 s left most people solid.
+Frame count and elapsed time drive this, not alignment quality — so the app now
+reads `DateTimeOriginal` and warns when a selection spans more than 3 s, or when
+exposure times repeat (which means more than one bracket got selected).
+
+One more thing that showed up: at 1/8000 f/16 ISO 400 the darkest frame has a
+median pixel value of **1**, with 85 % of pixels within ±8 of that median.
+`AlignMTB` thresholds at the median, so its bitmap is essentially noise and the
+shift it computes for such a frame is not trustworthy — ORB independently found
+2 usable inliers on those frames versus 350–845 on the mid-exposure ones. Very
+dark frames contribute little to the fusion anyway, but their alignment should
+not be believed.
 
 ## Not implemented
 
