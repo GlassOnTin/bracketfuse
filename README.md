@@ -151,6 +151,24 @@ because the reference is blown there and the guard above correctly declines to
 touch it. On a static tripod stack it replaces 0.0% and the output is identical
 to not running it at all.
 
+The hardest real case — 9 frames spanning 16 s across two brackets, the selection
+that produced the original ghosted result — at 2236×1491, scored against the
+app's own reference frame with alignment geometry held identical between runs:
+
+| region | deghost off | deghost on |
+|---|---|---|
+| crowd band | 0.8729 | **0.9696** |
+| static stonework | 0.9208 | 0.9291 |
+
+6.6% of the frame replaced; merge time 4.9 s → 10.3 s. The gain is concentrated
+exactly where subjects move, and static content is unchanged.
+
+A caution about that table: it is only meaningful because both runs share the
+same alignment. Comparing across builds that aligned to *different* reference
+frames is invalid — a rotated result cannot be matched by a shift search, and
+the score drops for reasons that have nothing to do with ghosting. Three earlier
+attempts at a real-image metric failed exactly that way before this one.
+
 Reference choice matters more than the threshold. The frame is picked by
 *well-exposed fraction minus blown fraction*; on the real bracket that chose the
 1/125 frame over the brighter 1/30 one, whose sky was 22.6% blown. That single
