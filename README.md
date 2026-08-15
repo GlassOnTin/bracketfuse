@@ -148,6 +148,46 @@ soon as it hits the ceiling. Device reports are welcome — two devices agreeing
 on the ceiling is suggestive, not proof, and nothing weaker than a OnePlus 13
 has been timed.
 
+### The Linear tone map always crashed
+
+`new cv.Tonemap(gamma)` was the fallback when the tone-map dropdown was not one
+of Drago, Reinhard or Mantiuk -- which is exactly what "Linear (gamma only)"
+selects. `cv.Tonemap` is OpenCV's abstract base class: this build exposes the
+symbol but it has **no accessible constructor**, so choosing Linear threw
+`Tonemap has no accessible constructor` and the merge failed outright. The three
+named subclasses all worked, which is why it went unnoticed.
+
+Linear is now done by hand, which is what the base class does anyway: normalise
+the radiance map to 0..1 across all channels together (per-channel would shift
+the white balance), then apply gamma. The range has to come from split channels
+because `minMaxLoc` rejects multi-channel input and this build has no
+`Mat.reshape` to flatten around it.
+
+Measured on synthetic exposures, all four now produce usable images:
+
+| tone map | min | mean | max | black | blown |
+|---|---|---|---|---|---|
+| Drago | 0 | 134.4 | 239 | 0.0% | 0.0% |
+| Reinhard | 10 | 148.1 | 246 | 0.0% | 0.0% |
+| Mantiuk | 21 | 145.0 | 240 | 0.0% | 0.0% |
+| Linear | 1 | 82.0 | 238 | 0.1% | 0.0% |
+
+Linear is darker, as a plain normalisation with no local adaptation should be.
+
+### Headless smoke test
+
+`node tools/smoke.js` runs the real `worker.js` under a node worker shim over
+synthetic exposures, walking every merge method and every tone-map option. A
+path reachable only through one dropdown value needs something that walks the
+dropdown.
+
+It also installs `tools/strided-guard.js`, which reports any read of `.data`
+from a Mat whose rows are not contiguous. **OpenCV.js's `.data` accessor ignores
+stride**, so on a submatrix it silently returns bytes from the wrong rows --
+plausible-looking data that quietly stops meaning anything. That cost SolFuse an
+entire invalidated measurement. BracketFuse takes no submatrices and the guard
+reports nothing, but it runs on every smoke test so that stays true.
+
 ## Not tested
 
 - Firefox and Safari, on any platform. Everything measured here is Chrome —

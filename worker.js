@@ -295,15 +295,52 @@ function trueHdr(vec, opts) {
   times.delete();
 
   progress(80, 'Tone mapping…');
+  const out = new cv.Mat();
   const t = { drago: () => new cv.TonemapDrago(opts.gamma, opts.saturation, opts.bias),
               mantiuk: () => new cv.TonemapMantiuk(opts.gamma, opts.scale, opts.saturation),
               reinhard: () => new cv.TonemapReinhard(opts.gamma, opts.intensity, opts.lightAdapt, opts.colorAdapt) }
-            [opts.tonemap] || (() => new cv.Tonemap(opts.gamma));
-  const op = t();
-  const out = new cv.Mat();
-  op.process(hdr, out);
-  op.delete();
+            [opts.tonemap];
+  if (t) {
+    const op = t();
+    op.process(hdr, out);
+    op.delete();
+    return out;
+  }
+  // "Linear (gamma only)" used to fall through to `new cv.Tonemap(gamma)`. That
+  // is OpenCV's abstract base class: this build exposes the symbol but it has
+  // no accessible constructor, so choosing Linear in the UI threw "Tonemap has
+  // no accessible constructor" and the merge failed outright. The three named
+  // subclasses were fine, which is why it went unnoticed.
+  //
+  // Doing it by hand is what the base class does anyway: normalise the radiance
+  // map to 0..1, then apply gamma.
+  linearTonemap(hdr, out, opts.gamma);
   return out;
+}
+
+// Normalise to 0..1 across all channels together, then gamma. Per-channel
+// normalisation would shift the white balance of the result.
+//
+// The range has to come from split channels: minMaxLoc rejects multi-channel
+// input, and this build has no Mat.reshape to flatten around it.
+function linearTonemap(src, dst, gamma) {
+  const g = gamma > 0 ? gamma : 1;
+  const ch = new cv.MatVector();
+  cv.split(src, ch);
+  let lo = Infinity, hi = -Infinity;
+  for (let c = 0; c < ch.size(); c++) {
+    const mm = cv.minMaxLoc(ch.get(c));
+    lo = Math.min(lo, mm.minVal);
+    hi = Math.max(hi, mm.maxVal);
+  }
+  for (let c = 0; c < ch.size(); c++) ch.get(c).delete();
+  ch.delete();
+  const span = hi - lo;
+  const tmp = new cv.Mat();
+  if (span > 1e-12) src.convertTo(tmp, cv.CV_32F, 1 / span, -lo / span);
+  else src.convertTo(tmp, cv.CV_32F, 0, 0);
+  cv.pow(tmp, 1 / g, dst);
+  tmp.delete();
 }
 
 // CV_32FC3 in 0..1 -> RGBA bytes the main thread can put straight on a canvas.
